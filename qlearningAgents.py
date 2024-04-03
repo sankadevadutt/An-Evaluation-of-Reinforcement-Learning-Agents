@@ -11,7 +11,8 @@
 # Student side autograding was added by Brad Miller, Nick Hay, and
 # Pieter Abbeel (pabbeel@cs.berkeley.edu).
 
-
+import os
+import json
 from game import *
 from learningAgents import ReinforcementAgent
 from featureExtractors import *
@@ -159,6 +160,7 @@ class PacmanQAgent(QLearningAgent):
         gamma    - discount factor
         numTraining - number of training episodes, i.e. no learning after these many episodes
         """
+        self.Sarsabool = False
         args['epsilon'] = epsilon
         args['gamma'] = gamma
         args['alpha'] = alpha
@@ -185,10 +187,14 @@ class ApproximateQAgent(PacmanQAgent):
        and update.  All other QLearningAgent functions
        should work as is.
     """
-    def __init__(self, extractor='IdentityExtractor', **args):
+    def __init__(self, extractor='IdentityExtractor', inst=0, **args):
         self.featExtractor = util.lookup(extractor, globals())()
         PacmanQAgent.__init__(self, **args)
         self.weights = util.Counter()
+        self.NTE = []
+        self.TotalAverageReward=[]
+        self.ER=[]
+        self.Instancerun=inst
 
     def getWeights(self):
         return self.weights
@@ -215,9 +221,141 @@ class ApproximateQAgent(PacmanQAgent):
         "Called at the end of each game."
         # call the super-class final method
         PacmanQAgent.final(self, state)
+        if self.episodesSoFar <= self.numTraining:
+            self.NTE.append(self.episodesSoFar)
+            tar=self.accumTrainRewards / (1.0 * self.episodesSoFar)
+            self.TotalAverageReward.append(tar)
+            self.ER.append(self.episodeRewards)
 
-        # did we finish training?
         if self.episodesSoFar == self.numTraining:
-            # you might want to print your weights here for debugging
             "*** YOUR CODE HERE ***"
             pass
+
+    def storemodelperformance(self, fname='output.json'):
+      fname=	fname[:len(fname)-5]
+      fname= fname+'_Alpha_'+str(self.alpha)+'_Instance_'+str(self.Instancerun)+'.json'
+      data=[]
+      for i in range(0,len(self.NTE)):
+        datarow={}
+        datarow['TrainingEpisodeNumber']=self.NTE[i]
+        datarow['TotalAverageReward']=self.TotalAverageReward[i]
+        datarow['RewardforEpisode']=self.ER[i]
+        data.append(datarow)
+      with open("modelperformance\\"+fname, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+class TOSarsaAgent(ApproximateQAgent):
+
+    def __init__(self, extractor='IdentityExtractor', tDRate=0.0, inst=0, **args):        
+        ApproximateQAgent.__init__(self, extractor, **args)
+        self.Sarsabool = True         
+        self.NTE = []
+        self.TotalAverageReward=[]
+        self.ER=[]
+        self.Alpha=self.alpha
+        self.Epsilon=self.epsilon
+        self.Gamma=self.discount
+        self.Lambda=tDRate
+        self.Instancerun=inst
+        self.tDRate = float(tDRate)
+             
+    def getQValue(self, state, action):
+        initalval=0.0
+        if state.data._lose:
+          return initalval
+        if state.data._win :
+          return initalval
+        
+        return ApproximateQAgent.getQValue(self, state, action)
+
+    def observationFunction(self, state, action):
+        if not self.lastState is None:
+            reward = state.getScore() - self.lastState.getScore()
+            self.observeTransition(self.lastState, self.lastAction, state, action, reward)
+        return state
+
+    def observeTransition(self, state,action,nextState,nextAction,deltaReward):
+        self.episodeRewards += deltaReward
+        self.update(state,action,nextState,nextAction,deltaReward)
+        
+    def startEpisode(self):
+        ApproximateQAgent.startEpisode(self)
+        self.oldQ = 0.0
+        self.z = util.Counter() 
+        
+
+    def update(self, state, action, nextState, nextAction, reward):
+        x = self.featExtractor.getFeatures(state, action)
+        q = self.getQValue(state, action)
+        q1 = self.getQValue(nextState, nextAction)
+        d = reward + self.discount*q1 - q
+
+        dot_product =0 
+        for xi in x:
+          dot_product+=x[xi]*self.z[xi]
+        
+        for xi in x:
+          self.z[xi] = (self.discount * self.tDRate * self.z[xi]) + (1 - self.alpha*self.discount*self.tDRate*dot_product)*x[xi]
+          self.weights[xi] += (self.alpha * (d + q - self.oldQ) * self.z[xi]) - (self.alpha * (q - self.oldQ) * x[xi])
+        
+        self.oldQ = q1
+
+    def getAction(self, state):
+        action = QLearningAgent.getAction(self,state)
+        return action
+    
+    def final(self, state):
+        deltaReward = state.getScore() - self.lastState.getScore()
+        self.observeTransition(self.lastState, self.lastAction, state, None, deltaReward)
+        self.stopEpisode()
+
+        # Make sure we have this var
+        if not 'episodeStartTime' in self.__dict__:
+            self.episodeStartTime = time.time()
+        if not 'lastWindowAccumRewards' in self.__dict__:
+            self.lastWindowAccumRewards = 0.0
+        self.lastWindowAccumRewards += state.getScore()
+
+        NUM_EPS_UPDATE = 100
+        if self.episodesSoFar % NUM_EPS_UPDATE == 0:
+            print('Reinforcement Learning Status:')
+            windowAvg = self.lastWindowAccumRewards / float(NUM_EPS_UPDATE)
+            if self.episodesSoFar <= self.numTraining:
+                trainAvg = self.accumTrainRewards / float(self.episodesSoFar)
+                print('\tCompleted %d out of %d training episodes' % (
+                       self.episodesSoFar,self.numTraining))
+                print('\tAverage Rewards over all training: %.2f' % (
+                        trainAvg))
+            else:
+                testAvg = float(self.accumTestRewards) / (self.episodesSoFar - self.numTraining)
+                print('\tCompleted %d test episodes' % (self.episodesSoFar - self.numTraining))
+                print('\tAverage Rewards over testing: %.2f' % testAvg)
+            print('\tAverage Rewards for last %d episodes: %.2f'  % (
+                    NUM_EPS_UPDATE,windowAvg))
+            print('\tEpisode took %.2f seconds' % (time.time() - self.episodeStartTime))
+            self.lastWindowAccumRewards = 0.0
+            self.episodeStartTime = time.time()
+
+        if self.episodesSoFar == self.numTraining:
+            msg = 'Training Done (turning off epsilon and alpha)'
+            print('%s\n%s' % (msg,'-' * len(msg)))
+
+      
+        if self.episodesSoFar <= self.numTraining:
+            self.NTE.append(self.episodesSoFar) 
+            tar=self.accumTrainRewards / (1.0 * self.episodesSoFar)
+            self.TotalAverageReward.append(tar)
+            self.ER.append(self.episodeRewards)
+
+    def storemodelperformance(self, fname='output.json'):	
+      fname=	fname[:len(fname)-5]
+      fname= fname+'_Alpha_'+str(self.Alpha)+'_Epsilon_'+str(self.Epsilon)+'_Gamma_'+str(self.Gamma)+'_Lambda_'+str(self.Lambda)+'_Instance_'+str(self.Instancerun)+'.json'
+      data=[]
+      for i in range(0,len(self.NTE)):
+        datarow={}
+        datarow['TrainingEpisodeNumber']=self.NTE[i]
+        datarow['TotalAverageReward']=self.TotalAverageReward[i]
+        datarow['RewardforEpisode']=self.ER[i]
+        data.append(datarow)
+      with open("modelperformance\\"+fname, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)

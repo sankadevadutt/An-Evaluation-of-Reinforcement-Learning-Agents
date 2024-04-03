@@ -556,6 +556,7 @@ def readCommand(argv):
 
     # Choose a layout
     args['layout'] = layout.getLayout(options.layout)
+    args['layoutname'] = options.layout
     if args['layout'] == None:
         raise Exception("The layout " + options.layout + " cannot be found")
 
@@ -662,7 +663,7 @@ def replayGame(layout, actions, display):
     display.finish()
 
 
-def runGames(layout, pacman, ghosts, display, numGames, record, numTraining=0, catchExceptions=False, timeout=30):
+def runGames(layout,layoutname, pacman, ghosts, display, numGames, record, numTraining=0, catchExceptions=False, timeout=30):
     import __main__
     __main__.__dict__['_display'] = display
 
@@ -705,7 +706,8 @@ def runGames(layout, pacman, ghosts, display, numGames, record, numTraining=0, c
               (wins.count(True), len(wins), winRate))
         print('Record:       ', ', '.join(
             [['Loss', 'Win'][int(w)] for w in wins]))
-
+    classname=pacman.__class__.__name__
+    pacman.storemodelperformance("output_" + str(classname) + "_" + str(layoutname) + ".json")
     return games
 
 
